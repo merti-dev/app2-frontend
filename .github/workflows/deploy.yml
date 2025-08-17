@@ -28,34 +28,35 @@ jobs:
       - name: Build (base-href /app2/) and package
         run: |
           set -euxo pipefail
-          # varsa proje scriptini kullan, yoksa ng:
           if npm run | grep -q "^  build"; then
             npm run build -- --base-href /app2/
           else
             npx ng build --base-href /app2/
           fi
-
-          # Angular sürümüne göre çıktı klasörünü bul
           APP_DIR=$(ls -d dist/* | head -n1)
-          if [ -d "$APP_DIR/browser" ]; then
-            OUT="$APP_DIR/browser"
-          else
-            OUT="$APP_DIR"
-          fi
-
+          if [ -d "$APP_DIR/browser" ]; then OUT="$APP_DIR/browser"; else OUT="$APP_DIR"; fi
           test -f "$OUT/index.html"
           tar -C "$OUT" -czf web.tar.gz .
           echo "Packaged from: $OUT"
           ls -lah web.tar.gz
-          find "$OUT" -maxdepth 1 -type f -name "index.html" -print
-          find "$OUT" -maxdepth 1 -type f -name "main*.js" -print || true
+
+      # 🔑 SECRET -> dosyaya yaz (çok satırlı key güvenle)
+      - name: Prepare SSH key
+        run: |
+          set -e
+          umask 077
+          cat > key.pem <<'EOF'
+          ${{ secrets.SSH_KEY }}
+          EOF
+          # doğrulama (içeriği maskeli görünür, sadece var mı yok mu kontrolü)
+          test -s key.pem
 
       - name: Copy files to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          key_path: key.pem                 # <-- key yerine key_path
           port: ${{ secrets.SSH_PORT || 22 }}
           source: "web.tar.gz"
           target: "/root/deploy-app2"
@@ -66,7 +67,7 @@ jobs:
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          key_path: key.pem                 # <-- key yerine key_path
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
             set -euxo pipefail
