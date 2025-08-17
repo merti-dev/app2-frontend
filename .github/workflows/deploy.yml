@@ -1,0 +1,81 @@
+name: Build & Deploy app2
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: app2-deploy
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (base-href /app2/) and package
+        run: |
+          set -euxo pipefail
+          # varsa proje scriptini kullan, yoksa ng:
+          if npm run | grep -q "^  build"; then
+            npm run build -- --base-href /app2/
+          else
+            npx ng build --base-href /app2/
+          fi
+
+          # Angular sürümüne göre çıktı klasörünü bul
+          APP_DIR=$(ls -d dist/* | head -n1)
+          if [ -d "$APP_DIR/browser" ]; then
+            OUT="$APP_DIR/browser"
+          else
+            OUT="$APP_DIR"
+          fi
+
+          test -f "$OUT/index.html"
+          tar -C "$OUT" -czf web.tar.gz .
+          echo "Packaged from: $OUT"
+          ls -lah web.tar.gz
+          find "$OUT" -maxdepth 1 -type f -name "index.html" -print
+          find "$OUT" -maxdepth 1 -type f -name "main*.js" -print || true
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "web.tar.gz"
+          target: "/root/deploy-app2"
+          overwrite: true
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -euxo pipefail
+            sudo mkdir -p /usr/share/app2/live
+            TMP_DIR=$(mktemp -d)
+            tar -xzf /root/deploy-app2/web.tar.gz -C "$TMP_DIR"
+            sudo rsync -a --delete "$TMP_DIR"/ /usr/share/app2/live/
+            rm -rf "$TMP_DIR"
+            sudo find /usr/share/app2/live -type d -exec chmod 755 {} \;
+            sudo find /usr/share/app2/live -type f -exec chmod 644 {} \;
+            sudo nginx -t
+            sudo systemctl reload nginx
