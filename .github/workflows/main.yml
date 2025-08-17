@@ -1,0 +1,55 @@
+name: Build & Deploy app2
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (base-href /app2/)
+        run: |
+          # Angular CLI varsa:
+          npx ng build --base-href /app2/
+          # (bazı şablonlarda "npm run build" kullanılır)
+          # npm run build -- --base-href /app2/
+          tar -C dist -czf web.tar.gz .
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "web.tar.gz"
+          target: "/root/deploy-app2"
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            sudo mkdir -p /usr/share/app2/live
+            sudo tar -xzf /root/deploy-app2/web.tar.gz -C /usr/share/app2/live --strip-components=1
+            sudo find /usr/share/app2/live -type d -exec chmod 755 {} \;
+            sudo find /usr/share/app2/live -type f -exec chmod 644 {} \;
+            sudo nginx -t && sudo systemctl reload nginx
