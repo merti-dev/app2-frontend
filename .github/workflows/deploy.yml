@@ -28,14 +28,14 @@ jobs:
       - name: Build (base-href /app2/) and package
         run: |
           set -euxo pipefail
-          # Projede build script'i varsa onu kullan, yoksa ng:
+          # Projede build script'i varsa onu kullan, yoksa ng ile derle
           if npm run | grep -q "^  build"; then
             npm run build -- --base-href /app2/
           else
             npx ng build --base-href /app2/
           fi
 
-          # Angular çıktı klasörünü tespit et
+          # Angular dist yapısı (dist/<app>/browser veya dist/<app>) için dayanıklı paketleme
           APP_DIR=$(ls -d dist/* | head -n1)
           if [ -d "$APP_DIR/browser" ]; then
             OUT="$APP_DIR/browser"
@@ -50,12 +50,24 @@ jobs:
           find "$OUT" -maxdepth 1 -type f -name "index.html" -print
           find "$OUT" -maxdepth 1 -type f -name "main*.js" -print || true
 
-      # 🔑 Private key'i SSH agent'a yükle (appleboy yerine kendi scp/ssh'ımızı kullanacağız)
+      # 🔑 SSH agent ile private key'i yükle (SSH_KEY secret'ı: BEGIN/END dahil private key)
       - name: Start ssh-agent and add key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_KEY }}
 
+      # Uzakta hedef klasörü oluştur
+      - name: Prepare remote destination dir
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euxo pipefail
+          PORT="${SSH_PORT:-22}"
+          ssh -p "$PORT" -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "mkdir -p /root/deploy-app2"
+
+      # web.tar.gz'yi kopyala
       - name: Upload web.tar.gz via scp
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -63,12 +75,10 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           set -euxo pipefail
-          : "${SSH_HOST:?Missing SSH_HOST secret}"
-          : "${SSH_USER:?Missing SSH_USER secret}"
           PORT="${SSH_PORT:-22}"
-          # Host key check'i devre dışı (istersen known_hosts ekleyebilirsin)
           scp -P "$PORT" -o StrictHostKeyChecking=no web.tar.gz "$SSH_USER@$SSH_HOST:/root/deploy-app2/web.tar.gz"
 
+      # Sunucuda aç, /app2 altına yayınla, Nginx reload (heredoc YOK)
       - name: Deploy on server via ssh
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -77,14 +87,4 @@ jobs:
         run: |
           set -euxo pipefail
           PORT="${SSH_PORT:-22}"
-          ssh -p "$PORT" -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
-            set -euxo pipefail
-            sudo mkdir -p /usr/share/app2/live
-            TMP_DIR=$(mktemp -d)
-            tar -xzf /root/deploy-app2/web.tar.gz -C "$TMP_DIR"
-            sudo rsync -a --delete "$TMP_DIR"/ /usr/share/app2/live/
-            rm -rf "$TMP_DIR"
-            sudo find /usr/share/app2/live -type d -exec chmod 755 {} \;
-            sudo find /usr/share/app2/live -type f -exec chmod 644 {} \;
-            sudo nginx -t
-            sudo systemctl reload nginx
+          ssh -p "$PORT" -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" 'set -euxo pipefail; sudo mkdir -p /usr/share/app2/live; TMP_DIR=$(mktemp -d); tar -xzf /root/deploy-app2/web.tar.gz -C "$TMP_DIR"; sudo rsync -a --delete "$TMP_DIR"/ /usr/share/app2/live/; rm -rf "$TMP_DIR"; sudo find /usr/share/app2/live -type d -exec chmod 755 {} \;; sudo find /usr/share/app2/live -type f -exec chmod 644 {} \;; sudo nginx -t; sudo systemctl reload nginx'
