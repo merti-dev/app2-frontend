@@ -88,4 +88,3 @@ jobs:
             sudo find /usr/share/app2/live -type f -exec chmod 644 {} \;
             sudo nginx -t
             sudo systemctl reload nginx
-REMOTE
